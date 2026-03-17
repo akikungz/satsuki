@@ -8,7 +8,11 @@ import { PrismaClient } from "./prisma/generated/client";
 import { loadProxyConfig } from "./src/proxy-config";
 import { createRouteResolver } from "./src/route-resolver";
 import { createRoutePattern, isPositiveInteger } from "./src/sni-utils";
-import { createProxyServer, type TlsCredentials } from "./src/tcp-proxy-server";
+import {
+  createProxyServer,
+  type FallbackErrorPage,
+  type TlsCredentials,
+} from "./src/tcp-proxy-server";
 
 const config = loadProxyConfig();
 
@@ -25,6 +29,17 @@ function loadTlsCredentials(): TlsCredentials | undefined {
   return {
     cert: fs.readFileSync(config.tlsCertPath),
     key: fs.readFileSync(config.tlsKeyPath),
+  };
+}
+
+function loadFallbackErrorPage(): FallbackErrorPage | undefined {
+  if (!config.nginxErrorHtmlPath) {
+    return undefined;
+  }
+
+  return {
+    statusCode: config.nginxErrorStatus,
+    html: fs.readFileSync(config.nginxErrorHtmlPath, "utf8"),
   };
 }
 
@@ -61,8 +76,10 @@ async function start(): Promise<void> {
   });
 
   const tlsCredentials = loadTlsCredentials();
+  const fallbackErrorPage = loadFallbackErrorPage();
   const server = createProxyServer(resolveRoute, {
     tlsCredentials,
+    fallbackErrorPage,
   });
 
   server.on("error", (error) => {
@@ -79,6 +96,12 @@ async function start(): Promise<void> {
       console.info("[proxy] TLS termination enabled (certificate/key loaded).");
     } else {
       console.info("[proxy] TLS passthrough mode enabled.");
+    }
+
+    if (fallbackErrorPage) {
+      console.info(
+        `[proxy] Fallback error page enabled from ${config.nginxErrorHtmlPath} (status ${config.nginxErrorStatus}).`,
+      );
     }
   });
 

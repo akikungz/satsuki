@@ -16,6 +16,8 @@ export type ProxyConfig = {
   routeCacheTtlSeconds: number;
   tlsCertPath: string | undefined;
   tlsKeyPath: string | undefined;
+  nginxErrorHtmlPath: string | undefined;
+  nginxErrorStatus: number;
 };
 
 export function parsePositiveIntegerEnv(
@@ -58,5 +60,7 @@ export function loadProxyConfig(): ProxyConfig {
     ),
     tlsCertPath,
     tlsKeyPath,
+    nginxErrorHtmlPath: process.env.NGINX_ERROR_HTML_PATH,
+    nginxErrorStatus: parsePositiveIntegerEnv(process.env.NGINX_ERROR_STATUS, 502),
   };
 }
