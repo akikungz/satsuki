@@ -30,6 +30,8 @@ Route resolution flow:
 5. Build multiple upstream candidates (VM IP first, hostname fallback).
 6. Forward to the first reachable upstream target port.
 
+The proxy logs SNI translation for every request (resolved candidates and selected upstream target).
+
 ### TLS certificate support
 
 The proxy supports two listener modes:
@@ -56,6 +58,8 @@ If not configured, the proxy keeps the previous behavior and closes failed clien
 - `PROXY_LISTEN_PORT` — bind port (default: `443`).
 - `PROXY_DOMAIN_SUFFIX` — allowed domain suffix (default: `fitm.cloud`).
 - `ROUTE_CACHE_TTL_SECONDS` — Redis TTL for route cache (default: `60`).
+- `PROXY_CLIENT_HANDSHAKE_TIMEOUT_MS` — timeout while waiting for SNI/initial routing (default: `120000`).
+- `PROXY_UPSTREAM_CONNECT_TIMEOUT_MS` — timeout for each upstream connect attempt (default: `15000`).
 - `TLS_CERT_PATH` — path to TLS certificate PEM file (optional; requires `TLS_KEY_PATH`).
 - `TLS_KEY_PATH` — path to TLS private key PEM file (optional; requires `TLS_CERT_PATH`).
 - `NGINX_ERROR_HTML_PATH` — path to fallback HTML page (optional; TLS termination mode only).

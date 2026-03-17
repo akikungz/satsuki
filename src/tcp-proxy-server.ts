@@ -5,8 +5,8 @@ import { type RouteTarget } from "./proxy-types";
 import { parseSniFromTlsClientHello } from "./sni-utils";
 
 const MAX_HANDSHAKE_BYTES = 16 * 1024;
-const CLIENT_TIMEOUT_MS = 30_000;
-const UPSTREAM_CONNECT_TIMEOUT_MS = 5_000;
+const DEFAULT_CLIENT_HANDSHAKE_TIMEOUT_MS = 120_000;
+const DEFAULT_UPSTREAM_CONNECT_TIMEOUT_MS = 15_000;
 
 export type ResolveRoute = (serverName: string) => Promise<RouteTarget[] | null>;
 
@@ -23,6 +23,8 @@ export type FallbackErrorPage = {
 export type ProxyServerOptions = {
   tlsCredentials?: TlsCredentials;
   fallbackErrorPage?: FallbackErrorPage;
+  clientHandshakeTimeoutMs?: number;
+  upstreamConnectTimeoutMs?: number;
 };
 
 type ClientSessionState = {
@@ -41,6 +43,15 @@ function openUpstream(route: RouteTarget): net.Socket {
   return net.connect(route.targetPort, route.targetHost);
 }
 
+function formatRoute(route: RouteTarget): string {
+  return `${route.targetHost}:${route.targetPort}`;
+}
+
+function logSniTranslation(serverName: string, routes: RouteTarget[]): void {
+  const translatedHosts = routes.map(formatRoute).join(", ");
+  console.info(`[proxy] SNI ${serverName} translated to [${translatedHosts}]`);
+}
+
 function pipeSockets(clientSocket: net.Socket, upstreamSocket: net.Socket): void {
   clientSocket.setTimeout(0);
   upstreamSocket.setTimeout(0);
@@ -51,7 +62,10 @@ function pipeSockets(clientSocket: net.Socket, upstreamSocket: net.Socket): void
   upstreamSocket.pipe(clientSocket);
 }
 
-async function connectToUpstreamTarget(route: RouteTarget): Promise<net.Socket> {
+async function connectToUpstreamTarget(
+  route: RouteTarget,
+  upstreamConnectTimeoutMs: number,
+): Promise<net.Socket> {
   return await new Promise<net.Socket>((resolve, reject) => {
     const upstreamSocket = openUpstream(route);
     let settled = false;
@@ -95,7 +109,7 @@ async function connectToUpstreamTarget(route: RouteTarget): Promise<net.Socket> 
       reject(new Error("Upstream connection timed out"));
     };
 
-    upstreamSocket.setTimeout(UPSTREAM_CONNECT_TIMEOUT_MS);
+    upstreamSocket.setTimeout(upstreamConnectTimeoutMs);
     upstreamSocket.once("connect", onConnect);
     upstreamSocket.once("error", onError);
     upstreamSocket.once("timeout", onTimeout);
@@ -105,15 +119,19 @@ async function connectToUpstreamTarget(route: RouteTarget): Promise<net.Socket> 
 async function connectToFirstAvailableUpstream(
   routes: RouteTarget[],
   serverName: string,
+  upstreamConnectTimeoutMs: number,
 ): Promise<{ socket: net.Socket; selectedRoute: RouteTarget }> {
   const failures: string[] = [];
 
   for (const route of routes) {
     try {
-      const socket = await connectToUpstreamTarget(route);
+      const socket = await connectToUpstreamTarget(route, upstreamConnectTimeoutMs);
       return { socket, selectedRoute: route };
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
+      console.warn(
+        `[proxy] Upstream candidate failed for ${serverName}: ${formatRoute(route)} (${reason})`,
+      );
       failures.push(`${route.targetHost}:${route.targetPort} (${reason})`);
     }
   }
@@ -189,7 +207,11 @@ function wireUpstreamErrorHandlers(
   });
 }
 
-function createPassthroughProxyServer(resolveRoute: ResolveRoute): net.Server {
+function createPassthroughProxyServer(
+  resolveRoute: ResolveRoute,
+  clientHandshakeTimeoutMs: number,
+  upstreamConnectTimeoutMs: number,
+): net.Server {
   return net.createServer((clientSocket) => {
     const state: ClientSessionState = {
       clientSocket,
@@ -197,7 +219,7 @@ function createPassthroughProxyServer(resolveRoute: ResolveRoute): net.Server {
       handshakeBytes: 0,
     };
 
-    clientSocket.setTimeout(CLIENT_TIMEOUT_MS);
+    clientSocket.setTimeout(clientHandshakeTimeoutMs);
     clientSocket.on("timeout", () => closeSocket(clientSocket));
     clientSocket.on("error", (error) => {
       console.error("[proxy] Client socket error:", error.message);
@@ -230,8 +252,18 @@ function createPassthroughProxyServer(resolveRoute: ResolveRoute): net.Server {
           return;
         }
 
+        logSniTranslation(serverName, routes);
+
         const { socket: upstreamSocket, selectedRoute } =
-          await connectToFirstAvailableUpstream(routes, serverName);
+          await connectToFirstAvailableUpstream(
+            routes,
+            serverName,
+            upstreamConnectTimeoutMs,
+          );
+
+        console.info(
+          `[proxy] SNI ${serverName} selected upstream ${formatRoute(selectedRoute)}`,
+        );
 
         upstreamSocket.write(bufferedHandshake);
         pipeSockets(clientSocket, upstreamSocket);
@@ -256,6 +288,8 @@ function createTlsTerminatingProxyServer(
   resolveRoute: ResolveRoute,
   tlsCredentials: TlsCredentials,
   fallbackErrorPage: FallbackErrorPage | undefined,
+  clientHandshakeTimeoutMs: number,
+  upstreamConnectTimeoutMs: number,
 ): tls.Server {
   return tls.createServer(
     {
@@ -263,7 +297,7 @@ function createTlsTerminatingProxyServer(
       key: tlsCredentials.key,
     },
     async (clientSocket) => {
-      clientSocket.setTimeout(CLIENT_TIMEOUT_MS);
+      clientSocket.setTimeout(clientHandshakeTimeoutMs);
       clientSocket.on("timeout", () => closeSocket(clientSocket));
       clientSocket.on("error", (error) => {
         console.error("[proxy] Client TLS socket error:", error.message);
@@ -288,8 +322,19 @@ function createTlsTerminatingProxyServer(
           return;
         }
 
+        logSniTranslation(serverName, routes);
+
         const { socket: upstreamSocket, selectedRoute } =
-          await connectToFirstAvailableUpstream(routes, serverName);
+          await connectToFirstAvailableUpstream(
+            routes,
+            serverName,
+            upstreamConnectTimeoutMs,
+          );
+
+        console.info(
+          `[proxy] SNI ${serverName} selected upstream ${formatRoute(selectedRoute)}`,
+        );
+
         wireSocketBridge(clientSocket, upstreamSocket);
 
         upstreamSocket.on("error", (error) => {
@@ -317,13 +362,24 @@ export function createProxyServer(
   resolveRoute: ResolveRoute,
   options: ProxyServerOptions = {},
 ): net.Server {
+  const clientHandshakeTimeoutMs =
+    options.clientHandshakeTimeoutMs ?? DEFAULT_CLIENT_HANDSHAKE_TIMEOUT_MS;
+  const upstreamConnectTimeoutMs =
+    options.upstreamConnectTimeoutMs ?? DEFAULT_UPSTREAM_CONNECT_TIMEOUT_MS;
+
   if (options.tlsCredentials) {
     return createTlsTerminatingProxyServer(
       resolveRoute,
       options.tlsCredentials,
       options.fallbackErrorPage,
+      clientHandshakeTimeoutMs,
+      upstreamConnectTimeoutMs,
     );
   }
 
-  return createPassthroughProxyServer(resolveRoute);
+  return createPassthroughProxyServer(
+    resolveRoute,
+    clientHandshakeTimeoutMs,
+    upstreamConnectTimeoutMs,
+  );
 }

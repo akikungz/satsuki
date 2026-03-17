@@ -58,3 +58,41 @@ describe("loadProxyConfig TLS settings", () => {
     process.env.TLS_KEY_PATH = previousKeyPath;
   });
 });
+
+describe("loadProxyConfig timeout settings", () => {
+  test("uses default timeout values when unset", () => {
+    const previousDatabaseUrl = process.env.DATABASE_URL;
+    const previousHandshakeTimeout = process.env.PROXY_CLIENT_HANDSHAKE_TIMEOUT_MS;
+    const previousUpstreamTimeout = process.env.PROXY_UPSTREAM_CONNECT_TIMEOUT_MS;
+
+    process.env.DATABASE_URL = "postgresql://example";
+    delete process.env.PROXY_CLIENT_HANDSHAKE_TIMEOUT_MS;
+    delete process.env.PROXY_UPSTREAM_CONNECT_TIMEOUT_MS;
+
+    const config = loadProxyConfig();
+    expect(config.clientHandshakeTimeoutMs).toBe(120000);
+    expect(config.upstreamConnectTimeoutMs).toBe(15000);
+
+    process.env.DATABASE_URL = previousDatabaseUrl;
+    process.env.PROXY_CLIENT_HANDSHAKE_TIMEOUT_MS = previousHandshakeTimeout;
+    process.env.PROXY_UPSTREAM_CONNECT_TIMEOUT_MS = previousUpstreamTimeout;
+  });
+
+  test("uses provided timeout overrides", () => {
+    const previousDatabaseUrl = process.env.DATABASE_URL;
+    const previousHandshakeTimeout = process.env.PROXY_CLIENT_HANDSHAKE_TIMEOUT_MS;
+    const previousUpstreamTimeout = process.env.PROXY_UPSTREAM_CONNECT_TIMEOUT_MS;
+
+    process.env.DATABASE_URL = "postgresql://example";
+    process.env.PROXY_CLIENT_HANDSHAKE_TIMEOUT_MS = "90000";
+    process.env.PROXY_UPSTREAM_CONNECT_TIMEOUT_MS = "20000";
+
+    const config = loadProxyConfig();
+    expect(config.clientHandshakeTimeoutMs).toBe(90000);
+    expect(config.upstreamConnectTimeoutMs).toBe(20000);
+
+    process.env.DATABASE_URL = previousDatabaseUrl;
+    process.env.PROXY_CLIENT_HANDSHAKE_TIMEOUT_MS = previousHandshakeTimeout;
+    process.env.PROXY_UPSTREAM_CONNECT_TIMEOUT_MS = previousUpstreamTimeout;
+  });
+});

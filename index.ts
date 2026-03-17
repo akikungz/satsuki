@@ -80,6 +80,8 @@ async function start(): Promise<void> {
   const server = createProxyServer(resolveRoute, {
     tlsCredentials,
     fallbackErrorPage,
+    clientHandshakeTimeoutMs: config.clientHandshakeTimeoutMs,
+    upstreamConnectTimeoutMs: config.upstreamConnectTimeoutMs,
   });
 
   server.on("error", (error) => {
@@ -103,6 +105,10 @@ async function start(): Promise<void> {
         `[proxy] Fallback error page enabled from ${config.nginxErrorHtmlPath} (status ${config.nginxErrorStatus}).`,
       );
     }
+
+    console.info(
+      `[proxy] Timeouts: handshake=${config.clientHandshakeTimeoutMs}ms, upstream-connect=${config.upstreamConnectTimeoutMs}ms`,
+    );
   });
 
   const shutdown = async () => {

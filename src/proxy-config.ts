@@ -6,6 +6,8 @@ const DEFAULT_DOMAIN_SUFFIX = "fitm.cloud";
 const DEFAULT_LISTEN_HOST = "0.0.0.0";
 const DEFAULT_LISTEN_PORT = 443;
 const DEFAULT_ROUTE_CACHE_TTL_SECONDS = 60;
+const DEFAULT_CLIENT_HANDSHAKE_TIMEOUT_MS = 120_000;
+const DEFAULT_UPSTREAM_CONNECT_TIMEOUT_MS = 15_000;
 
 export type ProxyConfig = {
   databaseUrl: string;
@@ -18,6 +20,8 @@ export type ProxyConfig = {
   tlsKeyPath: string | undefined;
   nginxErrorHtmlPath: string | undefined;
   nginxErrorStatus: number;
+  clientHandshakeTimeoutMs: number;
+  upstreamConnectTimeoutMs: number;
 };
 
 export function parsePositiveIntegerEnv(
@@ -62,5 +66,13 @@ export function loadProxyConfig(): ProxyConfig {
     tlsKeyPath,
     nginxErrorHtmlPath: process.env.NGINX_ERROR_HTML_PATH,
     nginxErrorStatus: parsePositiveIntegerEnv(process.env.NGINX_ERROR_STATUS, 502),
+    clientHandshakeTimeoutMs: parsePositiveIntegerEnv(
+      process.env.PROXY_CLIENT_HANDSHAKE_TIMEOUT_MS,
+      DEFAULT_CLIENT_HANDSHAKE_TIMEOUT_MS,
+    ),
+    upstreamConnectTimeoutMs: parsePositiveIntegerEnv(
+      process.env.PROXY_UPSTREAM_CONNECT_TIMEOUT_MS,
+      DEFAULT_UPSTREAM_CONNECT_TIMEOUT_MS,
+    ),
   };
 }
