@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import process from "node:process";
 
 import { PrismaPg } from "@prisma/adapter-pg";
@@ -7,7 +8,7 @@ import { PrismaClient } from "./prisma/generated/client";
 import { loadProxyConfig } from "./src/proxy-config";
 import { createRouteResolver } from "./src/route-resolver";
 import { createRoutePattern, isPositiveInteger } from "./src/sni-utils";
-import { createProxyServer } from "./src/tcp-proxy-server";
+import { createProxyServer, type TlsCredentials } from "./src/tcp-proxy-server";
 
 const config = loadProxyConfig();
 
@@ -15,6 +16,17 @@ const prismaAdapter = new PrismaPg({ connectionString: config.databaseUrl });
 const prisma = new PrismaClient({ adapter: prismaAdapter });
 
 let redis: RedisClientType | null = null;
+
+function loadTlsCredentials(): TlsCredentials | undefined {
+  if (!config.tlsCertPath || !config.tlsKeyPath) {
+    return undefined;
+  }
+
+  return {
+    cert: fs.readFileSync(config.tlsCertPath),
+    key: fs.readFileSync(config.tlsKeyPath),
+  };
+}
 
 async function initRedis(): Promise<void> {
   if (!config.redisUrl) {
@@ -48,7 +60,10 @@ async function start(): Promise<void> {
     routeCacheTtlSeconds: config.routeCacheTtlSeconds,
   });
 
-  const server = createProxyServer(resolveRoute);
+  const tlsCredentials = loadTlsCredentials();
+  const server = createProxyServer(resolveRoute, {
+    tlsCredentials,
+  });
 
   server.on("error", (error) => {
     console.error("[proxy] Server error:", error);
@@ -59,6 +74,12 @@ async function start(): Promise<void> {
     console.info(
       `[proxy] Listening on ${config.listenHost}:${config.listenPort} for *.${config.domainSuffix} SNI routes`,
     );
+
+    if (tlsCredentials) {
+      console.info("[proxy] TLS termination enabled (certificate/key loaded).");
+    } else {
+      console.info("[proxy] TLS passthrough mode enabled.");
+    }
   });
 
   const shutdown = async () => {

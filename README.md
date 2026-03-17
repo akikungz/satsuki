@@ -29,6 +29,13 @@ Route resolution flow:
 4. On cache miss, query Prisma (`instance_reverse_proxy` + `instance.pve_vm.hostname`).
 5. Forward raw TCP to upstream VM host/IP and target port.
 
+### TLS certificate support
+
+The proxy supports two listener modes:
+
+- **TLS passthrough mode (default):** no cert/key configured; proxy inspects ClientHello SNI and forwards raw TLS.
+- **TLS termination mode:** set both `TLS_CERT_PATH` and `TLS_KEY_PATH`; proxy terminates inbound TLS and forwards decrypted TCP to upstream.
+
 ### Environment variables
 
 - `DATABASE_URL` — PostgreSQL connection string for Prisma.
@@ -37,3 +44,5 @@ Route resolution flow:
 - `PROXY_LISTEN_PORT` — bind port (default: `443`).
 - `PROXY_DOMAIN_SUFFIX` — allowed domain suffix (default: `fitm.cloud`).
 - `ROUTE_CACHE_TTL_SECONDS` — Redis TTL for route cache (default: `60`).
+- `TLS_CERT_PATH` — path to TLS certificate PEM file (optional; requires `TLS_KEY_PATH`).
+- `TLS_KEY_PATH` — path to TLS private key PEM file (optional; requires `TLS_CERT_PATH`).

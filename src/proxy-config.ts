@@ -14,6 +14,8 @@ export type ProxyConfig = {
   listenHost: string;
   listenPort: number;
   routeCacheTtlSeconds: number;
+  tlsCertPath: string | undefined;
+  tlsKeyPath: string | undefined;
 };
 
 export function parsePositiveIntegerEnv(
@@ -34,6 +36,13 @@ export function loadProxyConfig(): ProxyConfig {
     throw new Error("DATABASE_URL is required");
   }
 
+  const tlsCertPath = process.env.TLS_CERT_PATH;
+  const tlsKeyPath = process.env.TLS_KEY_PATH;
+
+  if ((tlsCertPath && !tlsKeyPath) || (!tlsCertPath && tlsKeyPath)) {
+    throw new Error("TLS_CERT_PATH and TLS_KEY_PATH must be set together");
+  }
+
   return {
     databaseUrl,
     redisUrl: process.env.REDIS_URL,
@@ -47,5 +56,7 @@ export function loadProxyConfig(): ProxyConfig {
       process.env.ROUTE_CACHE_TTL_SECONDS,
       DEFAULT_ROUTE_CACHE_TTL_SECONDS,
     ),
+    tlsCertPath,
+    tlsKeyPath,
   };
 }
