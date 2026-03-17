@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 
-import { loadProxyConfig, parsePositiveIntegerEnv } from "./proxy-config";
+import {
+  loadProxyConfig,
+  parseNonNegativeIntegerEnv,
+  parsePositiveIntegerEnv,
+} from "./proxy-config";
 
 describe("parsePositiveIntegerEnv", () => {
   test("uses parsed value when positive integer", () => {
@@ -18,6 +22,16 @@ describe("parsePositiveIntegerEnv", () => {
 
   test("returns fallback for non-numeric values", () => {
     expect(parsePositiveIntegerEnv("abc", 443)).toBe(443);
+  });
+});
+
+describe("parseNonNegativeIntegerEnv", () => {
+  test("accepts 0 as disabled value", () => {
+    expect(parseNonNegativeIntegerEnv("0", 120000)).toBe(0);
+  });
+
+  test("uses fallback for negative values", () => {
+    expect(parseNonNegativeIntegerEnv("-1", 120000)).toBe(120000);
   });
 });
 
@@ -90,6 +104,24 @@ describe("loadProxyConfig timeout settings", () => {
     const config = loadProxyConfig();
     expect(config.clientHandshakeTimeoutMs).toBe(90000);
     expect(config.upstreamConnectTimeoutMs).toBe(20000);
+
+    process.env.DATABASE_URL = previousDatabaseUrl;
+    process.env.PROXY_CLIENT_HANDSHAKE_TIMEOUT_MS = previousHandshakeTimeout;
+    process.env.PROXY_UPSTREAM_CONNECT_TIMEOUT_MS = previousUpstreamTimeout;
+  });
+
+  test("accepts timeout value 0 to disable timeouts", () => {
+    const previousDatabaseUrl = process.env.DATABASE_URL;
+    const previousHandshakeTimeout = process.env.PROXY_CLIENT_HANDSHAKE_TIMEOUT_MS;
+    const previousUpstreamTimeout = process.env.PROXY_UPSTREAM_CONNECT_TIMEOUT_MS;
+
+    process.env.DATABASE_URL = "postgresql://example";
+    process.env.PROXY_CLIENT_HANDSHAKE_TIMEOUT_MS = "0";
+    process.env.PROXY_UPSTREAM_CONNECT_TIMEOUT_MS = "0";
+
+    const config = loadProxyConfig();
+    expect(config.clientHandshakeTimeoutMs).toBe(0);
+    expect(config.upstreamConnectTimeoutMs).toBe(0);
 
     process.env.DATABASE_URL = previousDatabaseUrl;
     process.env.PROXY_CLIENT_HANDSHAKE_TIMEOUT_MS = previousHandshakeTimeout;

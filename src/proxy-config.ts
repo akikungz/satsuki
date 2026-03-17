@@ -36,6 +36,18 @@ export function parsePositiveIntegerEnv(
   return fallback;
 }
 
+export function parseNonNegativeIntegerEnv(
+  value: string | undefined,
+  fallback: number,
+): number {
+  const parsed = Number.parseInt(value ?? "", 10);
+  if (Number.isInteger(parsed) && parsed >= 0) {
+    return parsed;
+  }
+
+  return fallback;
+}
+
 export function loadProxyConfig(): ProxyConfig {
   const databaseUrl = process.env.DATABASE_URL;
   if (!databaseUrl) {
@@ -66,11 +78,11 @@ export function loadProxyConfig(): ProxyConfig {
     tlsKeyPath,
     nginxErrorHtmlPath: process.env.NGINX_ERROR_HTML_PATH,
     nginxErrorStatus: parsePositiveIntegerEnv(process.env.NGINX_ERROR_STATUS, 502),
-    clientHandshakeTimeoutMs: parsePositiveIntegerEnv(
+    clientHandshakeTimeoutMs: parseNonNegativeIntegerEnv(
       process.env.PROXY_CLIENT_HANDSHAKE_TIMEOUT_MS,
       DEFAULT_CLIENT_HANDSHAKE_TIMEOUT_MS,
     ),
-    upstreamConnectTimeoutMs: parsePositiveIntegerEnv(
+    upstreamConnectTimeoutMs: parseNonNegativeIntegerEnv(
       process.env.PROXY_UPSTREAM_CONNECT_TIMEOUT_MS,
       DEFAULT_UPSTREAM_CONNECT_TIMEOUT_MS,
     ),
