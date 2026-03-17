@@ -2,7 +2,7 @@ import net from "node:net";
 import tls from "node:tls";
 
 import { type RouteTarget } from "./proxy-types";
-import { parseSniFromTlsClientHello } from "./sni-utils";
+import { parseHostFromHttpRequest, parseSniFromTlsClientHello } from "./sni-utils";
 
 const MAX_HANDSHAKE_BYTES = 16 * 1024;
 const DEFAULT_CLIENT_HANDSHAKE_TIMEOUT_MS = 120_000;
@@ -266,7 +266,21 @@ function createPassthroughProxyServer(
       }
 
       const bufferedHandshake = Buffer.concat(state.handshakeChunks);
-      const serverName = parseSniFromTlsClientHello(bufferedHandshake);
+      let serverName = parseSniFromTlsClientHello(bufferedHandshake);
+
+      if (!serverName) {
+        const httpHost = parseHostFromHttpRequest(bufferedHandshake);
+        if (httpHost.state === "found") {
+          serverName = httpHost.host;
+        } else if (httpHost.state === "invalid") {
+          console.warn("[proxy] HTTP request missing valid Host header.");
+          sendFallbackErrorPage(clientSocket, undefined);
+          return;
+        } else {
+          return;
+        }
+      }
+
       if (!serverName) {
         return;
       }

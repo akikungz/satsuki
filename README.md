@@ -23,7 +23,7 @@ This project was created using `bun init` in bun v1.3.6. [Bun](https://bun.com) 
 
 Route resolution flow:
 
-1. Parse SNI from the TLS ClientHello packet.
+1. Parse route host from TLS SNI, or from plain HTTP `Host` header when request is not TLS.
 2. Match the host against `p{port}-{instanceHostname}.{domainSuffix}`.
 3. Resolve route from Redis cache (if available).
 4. On cache miss, query Prisma (`instance_reverse_proxy` + `instance.pve_vm.hostname`).

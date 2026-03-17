@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import {
   createRoutePattern,
+  parseHostFromHttpRequest,
   parseSniFromTlsClientHello,
   parseSniTemplateHost,
   routeCacheKey,
@@ -132,5 +133,46 @@ describe("parseSniFromTlsClientHello", () => {
 describe("routeCacheKey", () => {
   test("normalizes to lowercase", () => {
     expect(routeCacheKey("P443-VM.fitm.cloud")).toBe("sni-route:p443-vm.fitm.cloud");
+  });
+});
+
+describe("parseHostFromHttpRequest", () => {
+  test("extracts host from plain HTTP request", () => {
+    const request = Buffer.from(
+      "GET / HTTP/1.1\r\nHost: p7443-vm-01.fitm.cloud\r\nUser-Agent: test\r\n\r\n",
+      "utf8",
+    );
+
+    expect(parseHostFromHttpRequest(request)).toEqual({
+      state: "found",
+      host: "p7443-vm-01.fitm.cloud",
+    });
+  });
+
+  test("removes port suffix from host header", () => {
+    const request = Buffer.from(
+      "GET / HTTP/1.1\r\nHost: p7443-vm-01.fitm.cloud:8080\r\n\r\n",
+      "utf8",
+    );
+
+    expect(parseHostFromHttpRequest(request)).toEqual({
+      state: "found",
+      host: "p7443-vm-01.fitm.cloud",
+    });
+  });
+
+  test("returns pending for incomplete headers", () => {
+    const request = Buffer.from("GET / HTTP/1.1\r\nHost: p7443-vm-01.fitm.cloud", "utf8");
+    expect(parseHostFromHttpRequest(request)).toEqual({ state: "pending" });
+  });
+
+  test("returns invalid when host header is missing", () => {
+    const request = Buffer.from("GET / HTTP/1.1\r\nUser-Agent: test\r\n\r\n", "utf8");
+    expect(parseHostFromHttpRequest(request)).toEqual({ state: "invalid" });
+  });
+
+  test("returns not-http for non-http data", () => {
+    const request = buildClientHelloPacket("p443-vm.fitm.cloud");
+    expect(parseHostFromHttpRequest(request)).toEqual({ state: "not-http" });
   });
 });

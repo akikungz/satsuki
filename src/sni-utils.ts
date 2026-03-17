@@ -3,6 +3,24 @@ export type ParsedSniTemplate = {
   instanceHostname: string;
 };
 
+export type ParsedHttpHostResult =
+  | { state: "pending" }
+  | { state: "not-http" }
+  | { state: "invalid" }
+  | { state: "found"; host: string };
+
+const HTTP_METHOD_PREFIXES = [
+  "GET ",
+  "POST ",
+  "PUT ",
+  "PATCH ",
+  "DELETE ",
+  "HEAD ",
+  "OPTIONS ",
+  "TRACE ",
+  "CONNECT ",
+];
+
 export function isPositiveInteger(value: number): boolean {
   return Number.isInteger(value) && value > 0;
 }
@@ -41,6 +59,61 @@ export function parseSniTemplateHost(
 
 export function routeCacheKey(serverName: string): string {
   return `sni-route:${serverName.toLowerCase()}`;
+}
+
+function normalizeHttpHost(hostHeaderValue: string): string | null {
+  const trimmed = hostHeaderValue.trim().toLowerCase();
+  if (!trimmed) {
+    return null;
+  }
+
+  if (trimmed.startsWith("[")) {
+    return trimmed;
+  }
+
+  const colonIndex = trimmed.indexOf(":");
+  return colonIndex >= 0 ? trimmed.slice(0, colonIndex) : trimmed;
+}
+
+export function parseHostFromHttpRequest(packet: Buffer): ParsedHttpHostResult {
+  if (packet.length < 4) {
+    return { state: "pending" };
+  }
+
+  const preview = packet.subarray(0, Math.min(packet.length, 8)).toString("ascii");
+  const isHttp = HTTP_METHOD_PREFIXES.some((prefix) => preview.startsWith(prefix));
+  if (!isHttp) {
+    return { state: "not-http" };
+  }
+
+  const headersEnd = packet.indexOf("\r\n\r\n");
+  if (headersEnd < 0) {
+    return { state: "pending" };
+  }
+
+  const headerText = packet.subarray(0, headersEnd).toString("latin1");
+  const lines = headerText.split("\r\n");
+
+  for (const line of lines) {
+    const separator = line.indexOf(":");
+    if (separator <= 0) {
+      continue;
+    }
+
+    const headerName = line.slice(0, separator).trim().toLowerCase();
+    if (headerName !== "host") {
+      continue;
+    }
+
+    const host = normalizeHttpHost(line.slice(separator + 1));
+    if (!host) {
+      return { state: "invalid" };
+    }
+
+    return { state: "found", host };
+  }
+
+  return { state: "invalid" };
 }
 
 export function parseSniFromTlsClientHello(packet: Buffer): string | undefined {
