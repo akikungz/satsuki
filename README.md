@@ -46,7 +46,7 @@ When TLS termination mode is enabled, you can configure a static Nginx-style err
 - Set `NGINX_ERROR_HTML_PATH` to a local HTML file path.
 - Optionally set `NGINX_ERROR_STATUS` (default: `502`).
 
-If not configured, the proxy keeps the previous behavior and closes failed client connections.
+If not configured, the proxy returns a built-in plain Nginx-style `502 Bad Gateway` HTML page.
 
 > Note: in TLS passthrough mode the proxy cannot safely inject HTTP content into encrypted streams, so fallback HTML is only applied in TLS termination mode.
 

@@ -7,6 +7,31 @@ import { parseSniFromTlsClientHello } from "./sni-utils";
 const MAX_HANDSHAKE_BYTES = 16 * 1024;
 const DEFAULT_CLIENT_HANDSHAKE_TIMEOUT_MS = 120_000;
 const DEFAULT_UPSTREAM_CONNECT_TIMEOUT_MS = 15_000;
+const DEFAULT_NGINX_ERROR_HTML = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>502 Bad Gateway</title>
+  <style>
+    html { color-scheme: light dark; }
+    body {
+      width: 35em;
+      margin: 6em auto;
+      font-family: Tahoma, Verdana, Arial, sans-serif;
+      line-height: 1.5;
+    }
+    h1 { margin-bottom: 0.25em; }
+    p { margin-top: 0.25em; }
+  </style>
+</head>
+<body>
+  <h1>502 Bad Gateway</h1>
+  <p>The proxy could not reach the upstream service.</p>
+  <p>Please try again later.</p>
+  <hr />
+  <p><em>satsuki proxy</em></p>
+</body>
+</html>`;
 
 export type ResolveRoute = (serverName: string) => Promise<RouteTarget[] | null>;
 
@@ -164,14 +189,18 @@ function sendFallbackErrorPage(
   clientSocket: net.Socket,
   fallbackErrorPage: FallbackErrorPage | undefined,
 ): void {
-  if (!fallbackErrorPage || clientSocket.destroyed) {
-    closeSocket(clientSocket);
+  if (clientSocket.destroyed) {
     return;
   }
 
-  const body = Buffer.from(fallbackErrorPage.html, "utf8");
+  const fallback = fallbackErrorPage ?? {
+    statusCode: 502,
+    html: DEFAULT_NGINX_ERROR_HTML,
+  };
+
+  const body = Buffer.from(fallback.html, "utf8");
   const headers = [
-    `HTTP/1.1 ${fallbackErrorPage.statusCode} ${reasonPhrase(fallbackErrorPage.statusCode)}`,
+    `HTTP/1.1 ${fallback.statusCode} ${reasonPhrase(fallback.statusCode)}`,
     "Content-Type: text/html; charset=utf-8",
     `Content-Length: ${body.byteLength}`,
     "Connection: close",
