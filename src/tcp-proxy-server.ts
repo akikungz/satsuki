@@ -42,6 +42,11 @@ function openUpstream(route: RouteTarget): net.Socket {
 }
 
 function pipeSockets(clientSocket: net.Socket, upstreamSocket: net.Socket): void {
+  clientSocket.setTimeout(0);
+  upstreamSocket.setTimeout(0);
+  clientSocket.setKeepAlive(true);
+  upstreamSocket.setKeepAlive(true);
+
   clientSocket.pipe(upstreamSocket);
   upstreamSocket.pipe(clientSocket);
 }
