@@ -75,9 +75,20 @@ async function generateConfig() {
       },
     });
 
-    let streamMapBlock = `map $ssl_preread_server_name $proxy_upstream {\n`;
-    streamMapBlock += `    default backend_default;\n`;
-    let streamUpstreamsBlock = `upstream backend_default {\n    server 127.0.0.1:443;\n}\n\n`;
+    let streamMapBlock = `map $ssl_preread_server_name $sni_from_preread {\n`
+    streamMapBlock += `    ""      $ssl_server_name;\n`
+    streamMapBlock += `    default $ssl_preread_server_name;\n`
+    streamMapBlock += `}\n\n`
+
+    streamMapBlock += `map $sni_from_preread $proxy_upstream {\n`
+    streamMapBlock += `    hostnames;\n`
+    streamMapBlock += `    ${PROXY_DOMAIN_SUFFIX}      backend_default;\n`
+    streamMapBlock += `    default                     backend_default;\n`
+    streamMapBlock += `}\n\n`
+
+    let streamUpstreamsBlock = `upstream backend_default {\n`
+    streamUpstreamsBlock += `    server 127.0.0.1:443;\n`
+    streamUpstreamsBlock += `}\n\n`
 
     let httpUpstreamsBlock = `\n`;
     let httpServerBlocks = `\n`;
