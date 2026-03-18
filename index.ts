@@ -1,0 +1,257 @@
+import { PrismaClient } from "./prisma/generated/client";
+import { PrismaPg } from "@prisma/adapter-pg";
+import { Pool, Client } from "pg";
+import { existsSync, writeFileSync, mkdirSync } from "fs";
+import { dirname } from "path";
+import { exec } from "child_process";
+import { promisify } from "util";
+
+const connectionString = process.env.DATABASE_URL;
+if (!connectionString) {
+  throw new Error("DATABASE_URL must be defined");
+}
+
+const execAsync = promisify(exec);
+const pool = new Pool({ connectionString });
+const adapter = new PrismaPg(pool);
+const prisma = new PrismaClient({ adapter });
+
+const PROXY_DOMAIN_SUFFIX = process.env.PROXY_DOMAIN_SUFFIX || "fitm.cloud";
+const NGINX_STREAM_CONF_PATH = process.env.NGINX_STREAM_CONF_PATH || "./nginx/satsuki-stream.conf";
+const NGINX_HTTP_CONF_PATH = process.env.NGINX_HTTP_CONF_PATH || "./nginx/satsuki-http.conf";
+const NGINX_RELOAD_COMMAND = process.env.NGINX_RELOAD_COMMAND || "nginx -s reload";
+
+const TLS_CERT_PATH = process.env.TLS_CERT_PATH || "/etc/nginx/ssl/fullchain.pem";
+const TLS_KEY_PATH = process.env.TLS_KEY_PATH || "/etc/nginx/ssl/privkey.pem";
+
+async function setupTriggers() {
+  console.log("Setting up database triggers...");
+
+  // Create the notification function
+  await prisma.$executeRawUnsafe(`
+    CREATE OR REPLACE FUNCTION notify_proxy_update() RETURNS TRIGGER AS $$
+    BEGIN
+      PERFORM pg_notify('proxy_updates', '');
+      RETURN NULL;
+    END;
+    $$ LANGUAGE plpgsql;
+  `);
+
+  // Define tables that should trigger a config refresh
+  const tables = [
+    "instance_reverse_proxy",
+    "instance",
+    "pve_vm",
+    "pve_network_ip"
+  ];
+
+  for (const table of tables) {
+    const triggerName = `${table}_proxy_update_trigger`;
+    await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS ${triggerName} ON "${table}";`);
+    await prisma.$executeRawUnsafe(`
+      CREATE TRIGGER ${triggerName}
+      AFTER INSERT OR UPDATE OR DELETE ON "${table}"
+      FOR EACH STATEMENT EXECUTE FUNCTION notify_proxy_update();
+    `);
+  }
+
+  console.log("Database triggers setup complete.");
+}
+
+async function generateConfig() {
+  console.log("Generating Nginx stream configuration...");
+  try {
+    const proxies = await prisma.instance_reverse_proxy.findMany({
+      include: {
+        instance: {
+          include: {
+            pve_vm: {
+              include: {
+                pve_network_ip: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    let streamMapBlock = `map $ssl_preread_server_name $proxy_upstream {\n`;
+    streamMapBlock += `    default backend_default;\n`;
+    let streamUpstreamsBlock = `upstream backend_default {\n    server 127.0.0.1:443;\n}\n\n`;
+
+    let httpUpstreamsBlock = `\n`;
+    let httpServerBlocks = `\n`;
+
+    // To prevent duplicate upstreams if multiple routes point to the same target
+    const streamUpstreams = new Set<string>();
+    const httpUpstreams = new Set<string>();
+
+    let validStreamRoutesCount = 0;
+    let validHttpRoutesCount = 0;
+
+    // Add default http redirect
+    httpServerBlocks += `server {\n`;
+    httpServerBlocks += `    listen 80;\n`;
+    httpServerBlocks += `    server_name *.${PROXY_DOMAIN_SUFFIX};\n`;
+    httpServerBlocks += `    location / {\n`;
+    httpServerBlocks += `        return 301 https://$host$request_uri;\n`;
+    httpServerBlocks += `    }\n`;
+    httpServerBlocks += `}\n`;
+
+    for (const proxy of proxies) {
+      const vm = proxy.instance?.pve_vm;
+      if (!vm || !vm.hostname) continue;
+
+      const ipAddress = vm.pve_network_ip?.ipAddress || vm.hostname;
+      const targetPort = proxy.targetPort;
+      const hostnameInfo = `p${targetPort}-${vm.hostname}.${PROXY_DOMAIN_SUFFIX}`;
+      const upstreamName = `backend_p${targetPort}_${vm.hostname.replace(/[^a-zA-Z0-9]/g, '_')}`;
+
+      if (proxy.type === "HTTPS" || proxy.type === "HTTP") {
+        httpServerBlocks += `server {\n`;
+        httpServerBlocks += `    listen 443 ssl;\n`;
+        httpServerBlocks += `    server_name ${hostnameInfo};\n`;
+        httpServerBlocks += `    \n`;
+        httpServerBlocks += `    ssl_certificate ${TLS_CERT_PATH};\n`;
+        httpServerBlocks += `    ssl_certificate_key ${TLS_KEY_PATH};\n`;
+        httpServerBlocks += `    \n`;
+        httpServerBlocks += `    location / {\n`;
+        httpServerBlocks += `        proxy_pass http://${upstreamName};\n`;
+        httpServerBlocks += `        proxy_set_header Host $host;\n`;
+        httpServerBlocks += `        proxy_set_header X-Real-IP $remote_addr;\n`;
+        httpServerBlocks += `        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n`;
+        httpServerBlocks += `        proxy_set_header X-Forwarded-Proto $scheme;\n`;
+        httpServerBlocks += `    }\n`;
+        httpServerBlocks += `}\n\n`;
+
+        if (!httpUpstreams.has(upstreamName)) {
+          httpUpstreamsBlock += `upstream ${upstreamName} {\n`;
+          httpUpstreamsBlock += `    server ${ipAddress}:${targetPort};\n`;
+          httpUpstreamsBlock += `}\n\n`;
+          httpUpstreams.add(upstreamName);
+        }
+        validHttpRoutesCount++;
+      } else if (proxy.type === "TCP") {
+        // TCP config
+        if (!streamUpstreams.has(upstreamName)) {
+          streamUpstreamsBlock += `upstream ${upstreamName} {\n`;
+          streamUpstreamsBlock += `    server ${ipAddress}:${targetPort};\n`;
+          streamUpstreamsBlock += `}\n\n`;
+          streamUpstreams.add(upstreamName);
+        }
+
+        streamMapBlock += `    ${hostnameInfo} ${upstreamName};\n`;
+        validStreamRoutesCount++;
+      } else {
+        console.log(`Unknown proxy type: ${proxy.type}`);
+      }
+    }
+
+    streamMapBlock += `}\n`;
+
+    const streamConfigContent = `# Auto-generated Nginx Stream Config - ${new Date().toISOString()}
+# Generated based on ${validStreamRoutesCount} active reverse proxy routes
+
+${streamMapBlock}
+${streamUpstreamsBlock}
+`;
+
+    const httpConfigContent = `# Auto-generated Nginx HTTP Config - ${new Date().toISOString()}
+# Generated based on ${validHttpRoutesCount} active reverse proxy routes
+
+${httpUpstreamsBlock}
+${httpServerBlocks}
+`;
+
+    // Ensure directories exist
+    mkdirSync(dirname(NGINX_STREAM_CONF_PATH), { recursive: true });
+    mkdirSync(dirname(NGINX_HTTP_CONF_PATH), { recursive: true });
+
+    writeFileSync(NGINX_STREAM_CONF_PATH, streamConfigContent, "utf-8");
+    writeFileSync(NGINX_HTTP_CONF_PATH, httpConfigContent, "utf-8");
+    console.log(`Successfully generated ${validStreamRoutesCount} stream routes to ${NGINX_STREAM_CONF_PATH}`);
+    console.log(`Successfully generated ${validHttpRoutesCount} http routes to ${NGINX_HTTP_CONF_PATH}`);
+
+    // Reload Nginx if configured
+    if (NGINX_RELOAD_COMMAND) {
+      console.log(`Reloading nginx using command: ${NGINX_RELOAD_COMMAND}`);
+      try {
+        await execAsync(NGINX_RELOAD_COMMAND);
+        console.log("Nginx reloaded successfully.");
+      } catch (e: any) {
+        console.error("Failed to reload Nginx:", e.message);
+      }
+    }
+
+  } catch (error) {
+    console.error("Error generating config:", error);
+  }
+}
+
+async function startListener() {
+  const client = new Client({
+    connectionString,
+  });
+
+  await client.connect();
+  console.log("Connected to PostgreSQL for LISTEN notifications.");
+
+  client.on('notification', async (msg) => {
+    if (msg.channel === 'proxy_updates') {
+      console.log('Received notification on proxy_updates channel. Regenerating config...');
+      await generateConfig();
+    }
+  });
+
+  await client.query('LISTEN "proxy_updates"');
+  console.log('Listening for proxy_updates...');
+}
+
+async function initEmptyConfig() {
+  if (!existsSync(NGINX_STREAM_CONF_PATH)) {
+    console.log(`Stream config file not found at ${NGINX_STREAM_CONF_PATH}. Instantiating empty config...`);
+    const emptyStreamConfig = `# Auto-generated Nginx Stream Config - ${new Date().toISOString()}
+# Initialized empty block
+
+map $ssl_preread_server_name $proxy_upstream {
+    default backend_default;
+}
+
+upstream backend_default {
+    server 127.0.0.1:65535; # Fake fallback port
+}
+`;
+    mkdirSync(dirname(NGINX_STREAM_CONF_PATH), { recursive: true });
+    writeFileSync(NGINX_STREAM_CONF_PATH, emptyStreamConfig, "utf-8");
+  }
+
+  if (!existsSync(NGINX_HTTP_CONF_PATH)) {
+    console.log(`HTTP config file not found at ${NGINX_HTTP_CONF_PATH}. Instantiating empty config...`);
+    const emptyHttpConfig = `# Auto-generated Nginx HTTP Config - ${new Date().toISOString()}
+# Initialized empty block
+`;
+    mkdirSync(dirname(NGINX_HTTP_CONF_PATH), { recursive: true });
+    writeFileSync(NGINX_HTTP_CONF_PATH, emptyHttpConfig, "utf-8");
+  }
+}
+
+async function main() {
+  console.log("Starting satsuki nginx stream config generator...");
+  await initEmptyConfig();
+  await setupTriggers();
+  await generateConfig(); // Generate on startup
+  await startListener();
+
+  // Keep alive
+  process.on('SIGINT', async () => {
+    console.log("Shutting down...");
+    await prisma.$disconnect();
+    process.exit(0);
+  });
+}
+
+main().catch(e => {
+  console.error("Fatal error:", e);
+  prisma.$disconnect();
+  process.exit(1);
+});

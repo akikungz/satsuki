@@ -508,4 +508,5 @@ enum PlatformRole {
 enum ReverseProxyType {
   HTTPS
   HTTP
+  TCP
 }
