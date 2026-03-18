@@ -140,9 +140,7 @@ async function generateConfig() {
 
     streamMapBlock += `map $sni_from_preread $proxy_upstream {\n`
     streamMapBlock += `    hostnames;\n`
-    streamMapBlock += `    ${PROXY_DOMAIN_SUFFIX}      backend_default;\n`
-    streamMapBlock += `    default                     backend_default;\n`
-    streamMapBlock += `}\n\n`
+    streamMapBlock += `    ${PROXY_DOMAIN_SUFFIX} backend_default;\n`
 
     let streamUpstreamsBlock = `upstream backend_default {\n`
     streamUpstreamsBlock += `    server 127.0.0.1:443;\n`
@@ -216,6 +214,7 @@ async function generateConfig() {
       }
     }
 
+    streamMapBlock += `    default backend_default;\n`
     streamMapBlock += `}\n`;
 
     const streamConfigContent = `# Auto-generated Nginx Stream Config - ${new Date().toISOString()}
