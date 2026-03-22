@@ -12,7 +12,22 @@ To run:
 bun run index.ts
 ```
 
+To test:
+
+```bash
+bun test
+```
+
 This project was created using `bun init` in bun v1.3.6. [Bun](https://bun.com) is a fast all-in-one JavaScript runtime.
+
+## Architecture
+
+The app is organized into clean-architecture style layers:
+
+- `src/domain`: pure business rules and renderers for Nginx config and `authorized_keys`
+- `src/application`: use cases and port interfaces
+- `src/infrastructure`: Prisma, filesystem, shell, time, logging, and Postgres LISTEN/NOTIFY adapters
+- `src/bootstrap`: composition root that wires the app together
 
 ## Nginx Stream Config Generator
 
