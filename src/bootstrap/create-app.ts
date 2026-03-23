@@ -72,5 +72,5 @@ export function createApp() {
     },
   });
 
-  return { app };
+  return app;
 }

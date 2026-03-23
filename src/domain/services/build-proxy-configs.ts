@@ -99,19 +99,16 @@ export function buildProxyConfigs(
   streamMapBlock += "}\n";
 
   const generatedAt = options.generatedAt.toISOString();
-  const streamConfig = `# Auto-generated Nginx Stream Config - ${generatedAt}
-# Generated based on ${validStreamRoutesCount} active reverse proxy routes
 
-${streamMapBlock}
-${streamUpstreamsBlock}
-`;
+  let streamConfig = `# Auto-generated Nginx Stream Config - ${generatedAt}\n`;
+  streamConfig += `# Generated based on ${validStreamRoutesCount} active reverse proxy routes\n\n`;
+  streamConfig += streamMapBlock + "\n";
+  streamConfig += streamUpstreamsBlock;
 
-  const httpConfig = `# Auto-generated Nginx HTTP Config - ${generatedAt}
-# Generated based on ${validHttpRoutesCount} active reverse proxy routes
-
-${httpUpstreamsBlock}
-${httpServerBlocks}
-`;
+  let httpConfig = `# Auto-generated Nginx HTTP Config - ${generatedAt}\n`;
+  httpConfig += `# Generated based on ${validHttpRoutesCount} active reverse proxy routes\n\n`;
+  httpConfig += httpUpstreamsBlock;
+  httpConfig += httpServerBlocks;
 
   return {
     streamConfig,
@@ -124,21 +121,26 @@ ${httpServerBlocks}
 export function buildEmptyProxyConfigs(generatedAt: Date): ProxyConfigArtifacts {
   const timestamp = generatedAt.toISOString();
 
+  let streamConfig = `# Auto-generated Nginx Stream Config - ${timestamp}\n`;
+  streamConfig += "# Initialized empty block\n\n";
+  streamConfig += "map $ssl_preread_server_name $sni_from_preread {\n";
+  streamConfig += '    ""      $ssl_server_name;\n';
+  streamConfig += "    default $ssl_preread_server_name;\n";
+  streamConfig += "}\n\n";
+  streamConfig += "map $sni_from_preread $proxy_upstream {\n";
+  streamConfig += "    default backend_default;\n";
+  streamConfig += "}\n\n";
+  streamConfig += "upstream backend_default {\n";
+  streamConfig += "    server 127.0.0.1:65535; # Fake fallback port\n";
+  streamConfig += "}\n\n";
+
+  let httpConfig = `# Auto-generated Nginx HTTP Config - ${timestamp}\n`;
+  httpConfig += "# Initialized empty block\n";
+  httpConfig += "\n";
+
   return {
-    streamConfig: `# Auto-generated Nginx Stream Config - ${timestamp}
-# Initialized empty block
-
-map $ssl_preread_server_name $proxy_upstream {
-    default backend_default;
-}
-
-upstream backend_default {
-    server 127.0.0.1:65535; # Fake fallback port
-}
-`,
-    httpConfig: `# Auto-generated Nginx HTTP Config - ${timestamp}
-# Initialized empty block
-`,
+    streamConfig,
+    httpConfig,
     validStreamRoutesCount: 0,
     validHttpRoutesCount: 0,
   };
