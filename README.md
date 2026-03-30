@@ -52,5 +52,40 @@ Process flow:
 
 - `DATABASE_URL` — PostgreSQL connection string (must be direct connection to support LISTEN/NOTIFY, e.g. not a connection pooler like PgBouncer in transaction mode).
 - `PROXY_DOMAIN_SUFFIX` — allowed domain suffix (default: `fitm.cloud`).
-- `NGINX_CONF_PATH` — path to save generated stream conf (default: `./nginx/stream.conf`).
+- `NGINX_STREAM_CONF_PATH` — path to save generated stream conf (default: `./nginx/satsuki-stream.conf`).
+- `NGINX_HTTP_CONF_PATH` — path to save generated HTTP conf (default: `./nginx/satsuki-http.conf`).
 - `NGINX_RELOAD_COMMAND` — command executed to reload the web server when config updates (default: `nginx -s reload`).
+- `TLS_CERT_PATH` — TLS certificate path used in generated config.
+- `TLS_KEY_PATH` — TLS private key path used in generated config.
+- `BASTION_AUTHORIZED_KEYS_PATH` — output path for generated `authorized_keys`.
+
+## systemd
+
+A sample unit file is included at `deploy/satsuki.service`.
+
+Example installation on Linux:
+
+```bash
+sudo mkdir -p /opt/satsuki /etc/satsuki
+sudo cp -R . /opt/satsuki
+sudo cp deploy/satsuki.service /etc/systemd/system/satsuki.service
+sudo cp .env /etc/satsuki/satsuki.env
+sudo systemctl daemon-reload
+sudo systemctl enable --now satsuki
+```
+
+Then check the service:
+
+```bash
+sudo systemctl status satsuki
+sudo journalctl -u satsuki -f
+```
+
+Adjust these values to match your server before enabling it:
+
+- `User` and `Group` in `deploy/satsuki.service` if you want to run without `root`
+- `WorkingDirectory` in `deploy/satsuki.service`
+- `EnvironmentFile` in `deploy/satsuki.service`
+- The `bun` binary path if it is not available in the service `PATH`
+
+The sample uses `root` because this service may need permission to write Nginx config files, update `authorized_keys`, and run the Nginx reload command. If you want to run it as a dedicated service user instead, make sure that user has access to all configured output paths and reload commands first.

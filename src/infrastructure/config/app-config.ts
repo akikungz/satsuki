@@ -25,6 +25,6 @@ export function loadAppConfig(env: NodeJS.ProcessEnv): AppConfig {
     tlsCertPath: env.TLS_CERT_PATH || "/etc/nginx/ssl/fullchain.pem",
     tlsKeyPath: env.TLS_KEY_PATH || "/etc/nginx/ssl/privkey.pem",
     bastionAuthorizedKeysPath:
-      env.BASTION_AUTHORIZED_KEYS_PATH || "./authorized_keys",
+      env.BASTION_AUTHORIZED_KEYS_PATH || "./ssh/authorized_keys",
   };
 }

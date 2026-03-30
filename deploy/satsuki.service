@@ -1,0 +1,19 @@
+[Unit]
+Description=Satsuki background worker
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/satsuki
+Environment=NODE_ENV=production
+EnvironmentFile=/etc/satsuki/satsuki.env
+ExecStart=/usr/bin/env bun run index.ts
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+KillSignal=SIGTERM
+
+[Install]
+WantedBy=multi-user.target
