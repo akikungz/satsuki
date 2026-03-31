@@ -12,55 +12,80 @@ To run:
 bun run index.ts
 ```
 
+To test:
+
+```bash
+bun test
+```
+
 This project was created using `bun init` in bun v1.3.6. [Bun](https://bun.com) is a fast all-in-one JavaScript runtime.
 
-## TCP reverse proxy (SNI-based)
+## Architecture
 
-`index.ts` runs a TCP/TLS passthrough reverse proxy that routes by SNI hostname template:
+The app is organized into clean-architecture style layers:
+
+- `src/domain`: pure business rules and renderers for Nginx config and `authorized_keys`
+- `src/application`: use cases and port interfaces
+- `src/infrastructure`: Prisma, filesystem, shell, time, logging, and Postgres LISTEN/NOTIFY adapters
+- `src/bootstrap`: composition root that wires the app together
+
+## Nginx Stream Config Generator
+
+`index.ts` runs a background Bun service that automatically generates an Nginx TCP/SNI stream configuration mapping `p{port_number}-{instance_hostname}.{domain_suffix}` to upstream VM instances.
+
+It connects to the PostgreSQL database directly, using `LISTEN` and `NOTIFY` over the `proxy_updates` channel to detect any changes to `instance_reverse_proxy` mapping or `instance` lifecycle events. Upon changes, it regenerates the Nginx `.conf` file and executes an Nginx reload command.
+
+Route resolution block format:
 
 - `p{port_number}-{instance_hostname}.fitm.cloud`
 - Example: `p8443-vm-01.fitm.cloud`
 
-Route resolution flow:
+Process flow:
 
-1. Parse route host from TLS SNI, or from plain HTTP `Host` header when request is not TLS.
-2. Match the host against `p{port}-{instanceHostname}.{domainSuffix}`.
-3. Resolve route from Redis cache (if available).
-4. On cache miss, query Prisma (`instance_reverse_proxy` + `instance.pve_vm.hostname`).
-5. Build multiple upstream candidates (VM IP first, hostname fallback).
-6. Forward to the first reachable upstream target port.
-
-The proxy logs SNI translation for every request (resolved candidates and selected upstream target).
-
-### TLS certificate support
-
-The proxy supports two listener modes:
-
-- **TLS passthrough mode (default):** no cert/key configured; proxy inspects ClientHello SNI and forwards raw TLS.
-- **TLS termination mode:** set both `TLS_CERT_PATH` and `TLS_KEY_PATH`; proxy terminates inbound TLS and forwards decrypted TCP to upstream.
-
-### Nginx error HTML fallback
-
-When TLS termination mode is enabled, you can configure a static Nginx-style error page for route/upstream failures.
-
-- Set `NGINX_ERROR_HTML_PATH` to a local HTML file path.
-- Optionally set `NGINX_ERROR_STATUS` (default: `502`).
-
-If not configured, the proxy returns a built-in plain Nginx-style `502 Bad Gateway` HTML page.
-
-> Note: in TLS passthrough mode the proxy cannot safely inject HTTP content into encrypted streams, so fallback HTML is only applied in TLS termination mode.
+1. Connects to PostgreSQL using Prisma and the generic `pg` client.
+2. Checks and applies database `TRIGGER`s for related tables (`instance_reverse_proxy`, `instance`, `pve_vm`, `pve_network_ip`).
+3. Whenever an insert, update, or delete occurs, Postgres fires the `notify_proxy_update()` trigger.
+4. The service generates a complete Nginx stream file with `map $ssl_preread_server_name` and `upstream` blocks.
+5. Saves the output file and optionally reloads Nginx dynamically.
 
 ### Environment variables
 
-- `DATABASE_URL` — PostgreSQL connection string for Prisma.
-- `REDIS_URL` — Redis connection string for route caching.
-- `PROXY_LISTEN_HOST` — bind host (default: `0.0.0.0`).
-- `PROXY_LISTEN_PORT` — bind port (default: `443`).
+- `DATABASE_URL` — PostgreSQL connection string (must be direct connection to support LISTEN/NOTIFY, e.g. not a connection pooler like PgBouncer in transaction mode).
 - `PROXY_DOMAIN_SUFFIX` — allowed domain suffix (default: `fitm.cloud`).
-- `ROUTE_CACHE_TTL_SECONDS` — Redis TTL for route cache (default: `60`).
-- `PROXY_CLIENT_HANDSHAKE_TIMEOUT_MS` — timeout while waiting for SNI/initial routing (default: `120000`).
-- `PROXY_UPSTREAM_CONNECT_TIMEOUT_MS` — timeout for each upstream connect attempt (default: `15000`).
-- `TLS_CERT_PATH` — path to TLS certificate PEM file (optional; requires `TLS_KEY_PATH`).
-- `TLS_KEY_PATH` — path to TLS private key PEM file (optional; requires `TLS_CERT_PATH`).
-- `NGINX_ERROR_HTML_PATH` — path to fallback HTML page (optional; TLS termination mode only).
-- `NGINX_ERROR_STATUS` — HTTP status for fallback response (default: `502`).
+- `NGINX_STREAM_CONF_PATH` — path to save generated stream conf (default: `./nginx/satsuki-stream.conf`).
+- `NGINX_HTTP_CONF_PATH` — path to save generated HTTP conf (default: `./nginx/satsuki-http.conf`).
+- `NGINX_RELOAD_COMMAND` — command executed to reload the web server when config updates (default: `nginx -s reload`).
+- `TLS_CERT_PATH` — TLS certificate path used in generated config.
+- `TLS_KEY_PATH` — TLS private key path used in generated config.
+- `BASTION_AUTHORIZED_KEYS_PATH` — output path for generated `authorized_keys`.
+
+## systemd
+
+A sample unit file is included at `deploy/satsuki.service`.
+
+Example installation on Linux:
+
+```bash
+sudo mkdir -p /opt/satsuki /etc/satsuki
+sudo cp -R . /opt/satsuki
+sudo cp deploy/satsuki.service /etc/systemd/system/satsuki.service
+sudo cp .env /etc/satsuki/satsuki.env
+sudo systemctl daemon-reload
+sudo systemctl enable --now satsuki
+```
+
+Then check the service:
+
+```bash
+sudo systemctl status satsuki
+sudo journalctl -u satsuki -f
+```
+
+Adjust these values to match your server before enabling it:
+
+- `User` and `Group` in `deploy/satsuki.service` if you want to run without `root`
+- `WorkingDirectory` in `deploy/satsuki.service`
+- `EnvironmentFile` in `deploy/satsuki.service`
+- The `bun` binary path if it is not available in the service `PATH`
+
+The sample uses `root` because this service may need permission to write Nginx config files, update `authorized_keys`, and run the Nginx reload command. If you want to run it as a dedicated service user instead, make sure that user has access to all configured output paths and reload commands first.
